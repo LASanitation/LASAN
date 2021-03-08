@@ -120,10 +120,10 @@ for(species in speciesList){
   #Get geographic extent for running the SDM.
   testExtent <- extent(env.data$Aspect)
   #Run MaxEnt model
-  xm <- maxent(x=modelSubsample[,c(env.filenames)],p=modelSubsample$pa,factors=c('Ecotopes','FloodPlain','LandUse','ClimateZones','FloodPlain','PublicLandStatus','WildlandUrbanInterface','LandCover','DominantCanopyCover','PotentialNaturalVegetation','DLC','Vegcover','Totrcv','WHR','cal_fire'))
+  xm <- maxent(x=modelData[,c(env.filenames)],p=modelData$pa,factors=c('Ecotopes','FloodPlain','LandUse','ClimateZones','FloodPlain','PublicLandStatus','WildlandUrbanInterface','LandCover','DominantCanopyCover','PotentialNaturalVegetation','DLC','Vegcover','Totrcv','WHR','cal_fire'))
   f <- list("Ecotopes"=levels(modelData$Ecotopes),"FloodPlain"=levels(modelData$FloodPlain),"LandUse"=levels(modelData$LandUse),"ClimateZones"=levels(modelData$ClimateZones),"FloodPlain"=levels(modelData$FloodPlain),"PublicLandStatus"=levels(modelData$PublicLandStatus),"WildlandUrbanInterface"=levels(modelData$WildlandUrbanInterface),"LandCover"=levels(modelData$LandCover),"DominantCanopyCover"=levels(modelData$DominantCanopyCover),"PotentialNaturalVegetation"=levels(modelData$PotentialNaturalVegetation),"DLC"=levels(modelData$DLC),"Vegcover"=levels(modelData$Vegcover),"Totrcv"=levels(modelData$Totrcv),"WHR"=levels(modelData$WHR),"cal_fire"=levels(modelData$cal_fire))
   #Evaluate maxent model.
-  exm <- suppressWarnings(evaluate(modeltest[modeltest$pa==1,c(env.filenames)],modeltest[modeltest$pa==0,c(env.filenames)],xm))
+  exm <- suppressWarnings(evaluate(modelData[modelData$pa==1,c(env.filenames)],modelData[modelData$pa==0,c(env.filenames)],xm))
   #Evaluate probability threshold of species detection
   bc.threshold <- threshold(x = exm, stat = "spec_sens")
   
