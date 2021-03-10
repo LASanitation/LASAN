@@ -1,14 +1,8 @@
 rm(list=ls())
 require(rgdal)
-require(rJava)
 require(raster)
-require(parallel)
-require(doParallel)
 require(foreach)
 require(ENMeval)
-
-#To deal with java issues
-.jinit()
 
 #Set your working directory.  Your's will be different on your machine.
 wd <- "~/Desktop/Practicum/LASAN/Code"
@@ -16,12 +10,18 @@ wd <- "~/Desktop/Practicum/LASAN/Code"
 setwd(wd)
 if(wd=="/home1/alsimons/LASAN"){
   rasterOptions(todisk = FALSE)
-  options( java.parameters = "-Xmx48g" )
+  options( java.parameters = "-Xmx100g" )
   rasterOptions(todisk=FALSE,maxmemory=2e+11,chunksize=1e+09)
+  require(rJava)
+  #To deal with java issues
+  .jinit()
   require(dismo)
 }
 if(wd=="~/Desktop/Practicum/LASAN/Code"){
   options(java.parameters = "-Xmx1g" )
+  require(rJava)
+  #To deal with java issues
+  .jinit()
   require(dismo)
 }
 
@@ -64,12 +64,26 @@ env.data <- stack(c(env.files))
 #Get environmental layer names
 env.filenames <- gsub("^./","",gsub(".tif","",env.files))
 
-#Read in the list of species, and their MaxEnt model evaluations, as generated from here:
+#Read in the list of species, and their MaxEnt model evaluations, as generated from here: https://github.com/LASanitation/LASAN/blob/main/LAIndicatorTaxaV1.R
 speciesList <- read.table("LAIndicatorTaxa.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
 #Filter this list so only the species with the highest SEDI scores are retained as indicators.
 speciesList <- dplyr::top_n(speciesList,100,SEDI)$species
 
-for(species in speciesList){
+#Get the list of species already evaluated.
+speciesDone <- list.files(pattern="Prediction(.*?).tif$",full.names=T)
+speciesDone <- gsub("^./Prediction","",gsub(".tif","",speciesDone))
+#Remove the species already evaluated from the next iteration of analysis.
+speciesList <-speciesList[!(speciesList %in% speciesDone)]
+
+SDM <- function(i) {
+  #Randomly select a species from the list of those not already analyzed.
+  #Get the list of species already evaluated.
+  speciesDone <- list.files(pattern="Prediction(.*?).tif$",full.names=T)
+  speciesDone <- gsub("^./Prediction","",gsub(".tif","",speciesDone))
+  #Remove the species already evaluated from the next iteration of analysis.
+  speciesList <-speciesList[!(speciesList %in% speciesDone)]
+  species <- speciesList[sample(length(speciesList))[1]]
+  
   #Extract observation locations for a given species.
   obs.data <- SpeciesLocations[SpeciesLocations$species==species,c("longitude.1","latitude.1")]
   
@@ -130,11 +144,16 @@ for(species in speciesList){
   r <- raster::predict(env.data, xm,extent=testExtent,na.rm=TRUE,inf.rm=TRUE,factors=f,progress='text')
   #Convert prediction probability raster to a presence/absence prediction.
   rPA <- r > bc.threshold
-  writeRaster(rPA,paste(wd,"/tmp/Prediction",species,".tif",sep=""),overwrite=T)
+  writeRaster(rPA,paste("Prediction",species,".tif",sep=""),overwrite=T)
 }
 
+#Run MaxEnt evaluations on all of the species.
+lapply(1:length(speciesList),SDM)
+
 #Summarize all map layers into a single layer representing the LA Ecological Index.
-files=list.files(path=paste(wd,"/tmp",sep=""),pattern="*.tif$",full.names=T)
-rs <- raster::stack(files)
-rs1 <- raster::calc(rs,sum)
-writeRaster(rs1,"summary.tif")
+files=list.files(pattern="Prediction(.*?).tif$",full.names=T)
+if(length(files)==100){
+  rs <- raster::stack(files)
+  rs1 <- raster::calc(rs,sum)
+  writeRaster(rs1,"summary.tif") 
+}
