@@ -30,6 +30,8 @@ SpeciesInput <- read.table("0175678-200613084148143.csv", header=TRUE, sep="\t",
 SpeciesInput <- SpeciesInput[SpeciesInput$taxonRank=="SPECIES",]
 names(SpeciesInput)[names(SpeciesInput)=="decimalLatitude"] <- "latitude"
 names(SpeciesInput)[names(SpeciesInput)=="decimalLongitude"] <- "longitude"
+#Filter observations by positional uncertainty.
+SpeciesInput <- SpeciesInput[SpeciesInput$coordinateUncertaintyInMeters <= 10,]
 
 #Convert species location data into a spatial dataframe.  Assume a CRS of EPSG:4326.
 xy <- SpeciesInput[,c("longitude","latitude")]
@@ -58,7 +60,7 @@ bgPoints <- bgPoints[!(bgPoints$x %in% all.obs.data$decimalLongitude.1) & !(bgPo
 colnames(bgPoints) <- c("longitude.1","latitude.1")
 
 #List environmental rasters
-env.files <- list.files(pattern=".tif$",full.names=TRUE)
+env.files <- list.files(path=paste(wd,"/envLayers",sep=""),pattern=".tif$",full.names=TRUE)
 #Stack environmental layers
 env.data <- stack(c(env.files))
 #Get environmental layer names
@@ -69,9 +71,6 @@ speciesList <- read.table("LAIndicatorTaxa.txt", header=TRUE, sep="\t",as.is=T,s
 #Filter this list so only the species with the highest SEDI scores are retained as indicators.
 speciesList <- dplyr::top_n(speciesList,100,SEDI)$species
 
-#Get the list of species already evaluated.
-speciesDone <- list.files(pattern="Prediction(.*?).tif$",full.names=T)
-speciesDone <- gsub("^./Prediction","",gsub(".tif","",speciesDone))
 #Remove the species already evaluated from the next iteration of analysis.
 speciesList <-speciesList[!(speciesList %in% speciesDone)]
 
@@ -145,15 +144,14 @@ SDM <- function(i) {
   #Convert prediction probability raster to a presence/absence prediction.
   rPA <- r > bc.threshold
   writeRaster(rPA,paste("Prediction",species,".tif",sep=""),overwrite=T)
+  #Summarize all map layers into a single layer representing the LA Ecological Index.
+  files=list.files(pattern="Prediction(.*?).tif$",full.names=T)
+  if(length(files)==100){
+    rs <- raster::stack(files)
+    rs1 <- raster::calc(rs,sum,na.rm=T)
+    writeRaster(rs1,"summary100.tif") 
+  }
 }
 
 #Run MaxEnt evaluations on all of the species.
 lapply(1:length(speciesList),SDM)
-
-#Summarize all map layers into a single layer representing the LA Ecological Index.
-files=list.files(pattern="Prediction(.*?).tif$",full.names=T)
-if(length(files)==100){
-  rs <- raster::stack(files)
-  rs1 <- raster::calc(rs,sum)
-  writeRaster(rs1,"summary.tif") 
-}
