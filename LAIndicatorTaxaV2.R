@@ -92,10 +92,7 @@ bgPoints <- bgPoints[!(bgPoints$x %in% all.obs.data$decimalLongitude.1) & !(bgPo
 colnames(bgPoints) <- c("longitude.1","latitude.1")
 
 #List environmental rasters
-env.files <- list.files(pattern=".tif$",full.names=TRUE)
-#Get the list of species already evaluated.
-layersDone <- list.files(pattern="Prediction(.*?).tif$|PredictionNatives(.*?).tif$",full.names=T)
-env.files <- env.files[!(env.files %in% layersDone)]
+env.files <- list.files(path=paste(wd,"/envLayers",sep=""),pattern=".tif$",full.names=TRUE)
 #Stack environmental layers
 env.data <- stack(c(env.files))
 #Get environmental layer names
