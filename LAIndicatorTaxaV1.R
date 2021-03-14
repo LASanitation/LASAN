@@ -1,8 +1,14 @@
 rm(list=ls())
 require(rgdal)
+require(rJava)
 require(raster)
+require(parallel)
+require(doParallel)
 require(foreach)
 require(ENMeval)
+
+#To deal with java issues
+.jinit()
 
 #Set your working directory.  Your's will be different on your machine.
 wd <- "~/Desktop/Practicum/LASAN/Code"
@@ -10,18 +16,12 @@ wd <- "~/Desktop/Practicum/LASAN/Code"
 setwd(wd)
 if(wd=="/home1/alsimons/LASAN"){
   rasterOptions(todisk = FALSE)
-  options( java.parameters = "-Xmx100g" )
+  options( java.parameters = "-Xmx48g" )
   rasterOptions(todisk=FALSE,maxmemory=2e+11,chunksize=1e+09)
-  require(rJava)
-  #To deal with java issues
-  .jinit()
   require(dismo)
 }
 if(wd=="~/Desktop/Practicum/LASAN/Code"){
   options(java.parameters = "-Xmx1g" )
-  require(rJava)
-  #To deal with java issues
-  .jinit()
   require(dismo)
 }
 
@@ -30,6 +30,8 @@ SpeciesInput <- read.table("0175678-200613084148143.csv", header=TRUE, sep="\t",
 SpeciesInput <- SpeciesInput[SpeciesInput$taxonRank=="SPECIES",]
 names(SpeciesInput)[names(SpeciesInput)=="decimalLatitude"] <- "latitude"
 names(SpeciesInput)[names(SpeciesInput)=="decimalLongitude"] <- "longitude"
+#Filter observations by positional uncertainty.
+SpeciesInput <- SpeciesInput[SpeciesInput$coordinateUncertaintyInMeters <= 10,]
 
 #Convert species location data into a spatial dataframe.  Assume a CRS of EPSG:4326.
 xy <- SpeciesInput[,c("longitude","latitude")]
@@ -49,6 +51,28 @@ SpeciesLocations <- SpeciesLocations[LABoundaries,]
 #Convert LA species observations back to a dataframe.
 SpeciesLocations <- as.data.frame(SpeciesLocations)
 
+#Filter LA species observations by time and prevalence.
+SpeciesFreq <- as.data.frame(table(SpeciesLocations[SpeciesLocations$year<=2020 & SpeciesLocations$year>=2010,"species"]))
+Prevalence <- 30
+SpeciesFreq <- SpeciesFreq[SpeciesFreq$Freq >= Prevalence,]
+colnames(SpeciesFreq) <- c("species","Freq")
+SpeciesFreq$species <- as.character(SpeciesFreq$species)
+
+#Create a list of species above a certain number of observation points.
+speciesList <- SpeciesFreq$species
+
+#Get the list of species already evaluated.
+speciesDone <- list.files(pattern="MaxentEvaluation(.*?).txt")
+speciesDone <- gsub("MaxentEvaluation","",gsub(".txt","",speciesDone))
+#Remove the species already evaluated from the next iteration of analysis.
+speciesList <-speciesList[!(speciesList %in% speciesDone)]
+
+#Filter out species observation points to only include species with sufficient observational data.
+all.presvals <- SpeciesLocations[SpeciesLocations$species %in% speciesList,]
+
+#Specify sampling number for MaxEnt input data.
+sampleNum <- 25
+
 #Generate random background points for MaxEnt modeling.
 bgPoints <- as.data.frame(spsample(LABoundaries,n=100000,"random"))
 #Get all species locations.
@@ -57,36 +81,21 @@ all.obs.data <- SpeciesLocations[,c("longitude.1","latitude.1")]
 bgPoints <- bgPoints[!(bgPoints$x %in% all.obs.data$decimalLongitude.1) & !(bgPoints$y %in% all.obs.data$decimalLatitude.1),]
 colnames(bgPoints) <- c("longitude.1","latitude.1")
 
-#Get the list of species already evaluated.
-layersDone <- list.files(pattern="Prediction(.*?).tif$",full.names=T)
-speciesDone <- gsub("^./Prediction","",gsub(".tif","",layersDone))
-
 #List environmental rasters
-env.files <- list.files(pattern=".tif$",full.names=TRUE)
-#Remove the completed species prediction maps from the list of environmental layer maps.
-env.files <-env.files[!(env.files %in% layersDone)]
+env.files <- list.files(path=paste(wd,"/envLayers",sep=""),pattern=".tif$",full.names=TRUE)
 #Stack environmental layers
 env.data <- stack(c(env.files))
 #Get environmental layer names
 env.filenames <- gsub("^./","",gsub(".tif","",env.files))
 
-#Read in the list of species, and their MaxEnt model evaluations, as generated from here: https://github.com/LASanitation/LASAN/blob/main/LAIndicatorTaxaV1.R
-speciesList <- read.table("LAIndicatorTaxa.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
-#Filter this list so only the species with the highest SEDI scores are retained as indicators.
-speciesList <- dplyr::top_n(speciesList,100,SEDI)$species
-
-#Remove the species already evaluated from the next iteration of analysis.
-speciesList <-speciesList[!(speciesList %in% speciesDone)]
-
 SDM <- function(i) {
   #Randomly select a species from the list of those not already analyzed.
   #Get the list of species already evaluated.
-  speciesDone <- list.files(pattern="Prediction(.*?).tif$",full.names=T)
-  speciesDone <- gsub("^./Prediction","",gsub(".tif","",speciesDone))
+  speciesDone <- list.files(pattern="MaxentEvaluation(.*?).txt")
+  speciesDone <- gsub("MaxentEvaluation","",gsub(".txt","",speciesDone))
   #Remove the species already evaluated from the next iteration of analysis.
   speciesList <-speciesList[!(speciesList %in% speciesDone)]
   species <- speciesList[sample(length(speciesList))[1]]
-  
   #Extract observation locations for a given species.
   obs.data <- SpeciesLocations[SpeciesLocations$species==species,c("longitude.1","latitude.1")]
   
@@ -134,30 +143,54 @@ SDM <- function(i) {
   modelData$WHR <- factor(modelData$WHR, levels=unique(modelData$WHR))
   modelData$cal_fire <- factor(modelData$cal_fire, levels=unique(modelData$cal_fire))
   
-  #Get geographic extent for running the SDM.
-  testExtent <- extent(env.data$Aspect)
-  #Run MaxEnt model
-  xm <- maxent(x=modelData[,c(env.filenames)],p=modelData$pa,factors=c('Ecotopes','FloodPlain','LandUse','ClimateZones','FloodPlain','PublicLandStatus','WildlandUrbanInterface','LandCover','DominantCanopyCover','PotentialNaturalVegetation','DLC','Vegcover','Totrcv','WHR','cal_fire'))
-  f <- list("Ecotopes"=levels(modelData$Ecotopes),"FloodPlain"=levels(modelData$FloodPlain),"LandUse"=levels(modelData$LandUse),"ClimateZones"=levels(modelData$ClimateZones),"FloodPlain"=levels(modelData$FloodPlain),"PublicLandStatus"=levels(modelData$PublicLandStatus),"WildlandUrbanInterface"=levels(modelData$WildlandUrbanInterface),"LandCover"=levels(modelData$LandCover),"DominantCanopyCover"=levels(modelData$DominantCanopyCover),"PotentialNaturalVegetation"=levels(modelData$PotentialNaturalVegetation),"DLC"=levels(modelData$DLC),"Vegcover"=levels(modelData$Vegcover),"Totrcv"=levels(modelData$Totrcv),"WHR"=levels(modelData$WHR),"cal_fire"=levels(modelData$cal_fire))
-  #Evaluate maxent model.
-  exm <- suppressWarnings(evaluate(modelData[modelData$pa==1,c(env.filenames)],modelData[modelData$pa==0,c(env.filenames)],xm))
-  #Evaluate probability threshold of species detection
-  bc.threshold <- threshold(x = exm, stat = "spec_sens")
-  
-  r <- raster::predict(env.data, xm,extent=testExtent,na.rm=TRUE,inf.rm=TRUE,factors=f,progress='text')
-  #Convert prediction probability raster to a presence/absence prediction.
-  rPA <- r > bc.threshold
-  writeRaster(rPA,paste("Prediction",species,".tif",sep=""),overwrite=T)
+  #Create dataframe to store MaxEnt model evaluation metrics.
+  XMEvaluations <- data.frame()
+  #Run MaxEnt model using subsamples of data
+  for(i in 1:100){
+    #Randomly subsample the number of observation and pseudoabsence points.
+    presenceSubsample <-  modelData[modelData$pa==1,]
+    presenceSubsample <- presenceSubsample[sample(nrow(presenceSubsample),sampleNum),]
+    absenceSubsample <- modelData[modelData$pa==0,]
+    absenceSubsample <- absenceSubsample[sample(nrow(absenceSubsample),20*sampleNum),]
+    modelSubsample <- rbind(presenceSubsample,absenceSubsample)
+    #maxent()
+    xm <- maxent(x=modelSubsample[,c(env.filenames)],p=modelSubsample$pa,factors=c('Ecotopes','FloodPlain','LandUse','ClimateZones','FloodPlain','PublicLandStatus','WildlandUrbanInterface','LandCover','DominantCanopyCover','PotentialNaturalVegetation','DLC','Vegcover','Totrcv','WHR','cal_fire'))
+    #f <- list("Ecotopes"=levels(modelData$Ecotopes),"FloodPlain"=levels(modelData$FloodPlain),"LandUse"=levels(modelData$LandUse),"ClimateZones"=levels(modelData$ClimateZones),"FloodPlain"=levels(modelData$FloodPlain),"PublicLandStatus"=levels(modelData$PublicLandStatus),"WildlandUrbanInterface"=levels(modelData$WildlandUrbanInterface),"LandCover"=levels(modelData$LandCover),"DominantCanopyCover"=levels(modelData$DominantCanopyCover),"PotentialNaturalVegetation"=levels(modelData$PotentialNaturalVegetation),"DLC"=levels(modelData$DLC),"Vegcover"=levels(modelData$Vegcover),"Totrcv"=levels(modelData$Totrcv),"WHR"=levels(modelData$WHR),"cal_fire"=levels(modelData$cal_fire))
+    #Evaluate maxent model.
+    exm <- suppressWarnings(evaluate(p=modelSubsample[modelSubsample$pa==1,c(env.filenames)],a=modelSubsample[modelSubsample$pa==0,c(env.filenames)],model=xm))
+    tmp <- data.frame(matrix(nrow=1,ncol=5))
+    colnames(tmp) <- c("species","AUC","SEDI","r","p")
+    tmp$species <- species
+    tmp$AUC <- exm@auc
+    #SEDI: https://natureconservation.pensoft.net/article/33918/
+    a <- mean(exm@TPR,na.rm=T)
+    b <- mean(exm@FPR,na.rm=T)
+    c <- mean(exm@FNR,na.rm=T)
+    d <- mean(exm@TNR,na.rm=T)
+    H <- a/(a+c)
+    F <- b/(b+d)
+    tmp$SEDI <- (log(F)-log(H)-log(1-F)+log(1-H))/(log(F)+log(H)+log(1-F)+log(1-H))
+    tmp$r <- exm@cor
+    tmp$p <- exm@pcor
+    XMEvaluations <- rbind(XMEvaluations,tmp)
+    print(paste(species,"auc:",tmp$AUC,"SEDI:",tmp$SEDI,"cor:",tmp$r,"p:",tmp$p))
+  }
+  write.table(XMEvaluations,paste("MaxentEvaluation",species,".txt",sep=""),quote=FALSE,sep="\t",row.names = FALSE)
 }
 
 #Run MaxEnt evaluations on all of the species.
 lapply(1:length(speciesList),SDM)
 
-#Summarize all map layers into a single layer representing the LA Ecological Index.
-files=list.files(pattern="Prediction(.*?).tif$",full.names=T)
-if(length(files)==100){
-  rs <- raster::stack(files)
-  rs1 <- raster::calc(rs,sum)
-  writeRaster(rs1,"summary.tif") 
+##Get the list of species already evaluated.
+speciesDone <- list.files(pattern="MaxentEvaluation(.*?).txt")
+##Summarize all evaluations so each row is a unique species with all of its associated maxent model evaluations.
+XMEvaluationsTotal <- data.frame()
+for(speciesEval in speciesDone){
+  speciesEvalInput <- read.table(speciesEval, header=T, sep="\t",as.is=T,skip=0,fill=T,quote="\"",check.names=F,encoding = "UTF-8")
+  tmp <- speciesEvalInput %>% dplyr::summarise_if(is.numeric,mean,na.rm=T)
+  tmp$species <- unique(speciesEvalInput$species)
+  XMEvaluationsTotal <- rbind(XMEvaluationsTotal,tmp)
 }
 
+#Output MaxEnt model evaluation summary to a single file.
+write.table(XMEvaluationsTotal,"LAIndicatorTaxa.txt",quote=FALSE,sep="\t",row.names = FALSE)
