@@ -5,8 +5,8 @@ require(foreach)
 require(ENMeval)
 
 #Set your working directory.  Your's will be different on your machine.
-#wd <- "~/Desktop/Practicum/LASAN/Code"
-wd <- "/home1/alsimons/LASAN"
+wd <- "~/Desktop/Practicum/LASAN/Code"
+#wd <- "/home1/alsimons/LASAN"
 setwd(wd)
 if(wd=="/home1/alsimons/LASAN"){
   rasterOptions(todisk = FALSE)
@@ -59,14 +59,8 @@ all.obs.data <- SpeciesLocations[,c("longitude.1","latitude.1")]
 bgPoints <- bgPoints[!(bgPoints$x %in% all.obs.data$decimalLongitude.1) & !(bgPoints$y %in% all.obs.data$decimalLatitude.1),]
 colnames(bgPoints) <- c("longitude.1","latitude.1")
 
-#Get the list of species already evaluated.
-layersDone <- list.files(pattern="PredictionNatives(.*?).tif$",full.names=T)
-speciesDone <- gsub("^./PredictionNatives","",gsub(".tif","",layersDone))
-
 #List environmental rasters
-env.files <- list.files(pattern=".tif$",full.names=TRUE)
-#Remove the completed species prediction maps from the list of environmental layer maps.
-env.files <-env.files[!(env.files %in% layersDone)]
+env.files <- list.files(path=paste(wd,"/envLayers",sep=""),pattern=".tif$",full.names=TRUE)
 #Stack environmental layers
 env.data <- stack(c(env.files))
 #Get environmental layer names
@@ -76,9 +70,6 @@ env.filenames <- gsub("^./","",gsub(".tif","",env.files))
 speciesList <- read.table("LAIndicatorTaxaNatives.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
 #Filter this list so only the species with the highest SEDI scores are retained as indicators.
 speciesList <- dplyr::top_n(speciesList,100,SEDI)$species
-
-#Remove the species already evaluated from the next iteration of analysis.
-speciesList <-speciesList[!(speciesList %in% speciesDone)]
 
 SDM <- function(i) {
   #Randomly select a species from the list of those not already analyzed.
@@ -150,15 +141,14 @@ SDM <- function(i) {
   #Convert prediction probability raster to a presence/absence prediction.
   rPA <- r > bc.threshold
   writeRaster(rPA,paste("PredictionNatives",species,".tif",sep=""),overwrite=T)
+  #Summarize all map layers into a single layer representing the LA Ecological Index.
+  files=list.files(pattern="PredictionNatives(.*?).tif$",full.names=T)
+  if(length(files)==100){
+    rs <- raster::stack(files)
+    rs1 <- raster::calc(rs,sum,na.rm=T)
+    writeRaster(rs1,"summaryNatives100.tif") 
+  }
 }
 
 #Run MaxEnt evaluations on all of the species.
 lapply(1:length(speciesList),SDM)
-
-#Summarize all map layers into a single layer representing the LA Ecological Index.
-files=list.files(pattern="PredictionNatives(.*?).tif$",full.names=T)
-if(length(files)==100){
-  rs <- raster::stack(files)
-  rs1 <- raster::calc(rs,sum,na.rm=T)
-  writeRaster(rs1,"summaryNatives100.tif") 
-}
