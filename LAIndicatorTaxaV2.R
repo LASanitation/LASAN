@@ -83,20 +83,22 @@ all.presvals <- SpeciesLocations[SpeciesLocations$species %in% speciesList,]
 #Specify sampling number for MaxEnt input data.
 sampleNum <- 25
 
-#Generate random background points for MaxEnt modeling.
-bgPoints <- as.data.frame(spsample(LABoundaries,n=100000,"random"))
-#Get all species locations.
-all.obs.data <- SpeciesLocations[,c("longitude.1","latitude.1")]
-#Remove any potential overlap between random background points and actual observations.
-bgPoints <- bgPoints[!(bgPoints$x %in% all.obs.data$decimalLongitude.1) & !(bgPoints$y %in% all.obs.data$decimalLatitude.1),]
-colnames(bgPoints) <- c("longitude.1","latitude.1")
-
+#Remove environmental layers with a high degree of multicollinearity.
+#Only run this once to generate a list of layers with low multicollinearity.
 #List environmental rasters
-env.files <- list.files(path=paste(wd,"/envLayers",sep=""),pattern=".tif$",full.names=TRUE)
+#env.files <- list.files(path=paste(wd,"/envLayers",sep=""),pattern=".tif$",full.names=TRUE)
 #Stack environmental layers
-env.data <- stack(c(env.files))
+#env.data <- stack(c(env.files))
 #Get environmental layer names
-env.filenames <- gsub("^./","",gsub(".tif","",env.files))
+#env.filenames <- gsub(paste("^",wd,"/envLayers/",sep=""),"",gsub(".tif","",env.files))
+#env.filtered <- removeCollinearity(env.data,nb.points = 10000,sample.points = T,select.variables = T,multicollinearity.cutoff = 0.6)
+#env.filtered <- as.data.frame(env.filtered)
+#write.table(env.filtered,"EnvFilteredV1.txt",quote=FALSE,sep="\t",row.names = FALSE)
+
+#Create a filtered raster stack.
+env.filtered <- read.table("EnvFilteredV1.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
+env.filtered <- c(paste(wd,"/envLayers/",env.filtered$env.filtered,".tif",sep=""))
+env.data <- stack(c(env.filtered))
 
 SDM <- function(i) {
   #Randomly select a species from the list of those not already analyzed.
@@ -110,7 +112,7 @@ SDM <- function(i) {
   obs.data <- SpeciesLocations[SpeciesLocations$species==species,c("longitude.1","latitude.1")]
   
   # Initialize data containing environmental layer values at presence locations.
-  presvals <- as.data.frame(raster::extract(stack(env.files),obs.data))
+  presvals <- as.data.frame(raster::extract(env.data,obs.data))
   #Convert NA values to 0.
   presvals[is.na(presvals)] <- 0
   #Remove rows with missing data.
@@ -122,8 +124,7 @@ SDM <- function(i) {
   presvals$pa <- 1
   
   #Create a background point set.
-  abs.data <- bgPoints[sample(nrow(bgPoints),20*nrow(presvals)),]
-  absvals <- as.data.frame(raster::extract(stack(env.files),abs.data))
+  absvals <- as.data.frame(raster::extract(env.data,as.data.frame(spsample(LABoundaries,n=20*nrow(presvals),"random"))))
   #Convert NA values to 0.
   absvals[is.na(absvals)] <- 0
   #Remove rows with missing data.
@@ -137,21 +138,10 @@ SDM <- function(i) {
   #Merge presence/absence data
   #Set factor variables.
   modelData <- rbind(presvals,absvals)
-  modelData$LandUse <- factor(modelData$LandUse,levels=unique(modelData$LandUse))
-  modelData$Ecotopes <- factor(modelData$Ecotopes,levels=unique(modelData$Ecotopes))
-  modelData$FloodPlain <- factor(modelData$FloodPlain,levels=unique(modelData$FloodPlain))
-  modelData$ClimateZones <- factor(modelData$ClimateZones, levels=unique(modelData$ClimateZones))
-  modelData$FloodPlain <- factor(modelData$FloodPlain, levels=unique(modelData$FloodPlain))
-  modelData$PublicLandStatus <- factor(modelData$PublicLandStatus, levels=unique(modelData$PublicLandStatus))
-  modelData$WildlandUrbanInterface <- factor(modelData$WildlandUrbanInterface, levels=unique(modelData$WildlandUrbanInterface))
-  modelData$LandCover <- factor(modelData$LandCover, levels=unique(modelData$LandCover))
-  modelData$DominantCanopyCover <- factor(modelData$DominantCanopyCover, levels=unique(modelData$DominantCanopyCover))
-  modelData$PotentialNaturalVegetation <- factor(modelData$PotentialNaturalVegetation, levels=unique(modelData$PotentialNaturalVegetation))
-  modelData$DLC <- factor(modelData$DLC, levels=unique(modelData$DLC))
-  modelData$Vegcover <- factor(modelData$Vegcover, levels=unique(modelData$Vegcover))
-  modelData$Totrcv <- factor(modelData$Totrcv, levels=unique(modelData$Totrcv))
-  modelData$WHR <- factor(modelData$WHR, levels=unique(modelData$WHR))
-  modelData$cal_fire <- factor(modelData$cal_fire, levels=unique(modelData$cal_fire))
+  envFactors <- c("cal_fire","ClimateZones","DLC","DominantCanopyCover","EcoRegion","Ecotopes","FloodPlain","LandCover","LandUse","PublicLandStatus","Totrcv","Vegcover","WHR","WildlandUrbanInterface")
+  modelData[,colnames(modelData) %in% envFactors] <- lapply(modelData[,colnames(modelData) %in% envFactors],factor)
+  env.filtered <- gsub(paste("^",wd,"/envLayers/",sep=""),"",gsub(".tif","",env.filtered))
+  modelData <- modelData[,c(env.filtered,"pa")]
   
   #Create dataframe to store MaxEnt model evaluation metrics.
   XMEvaluations <- data.frame()
@@ -164,10 +154,14 @@ SDM <- function(i) {
     absenceSubsample <- absenceSubsample[sample(nrow(absenceSubsample),20*sampleNum),]
     modelSubsample <- rbind(presenceSubsample,absenceSubsample)
     #maxent()
-    xm <- maxent(x=modelSubsample[,c(env.filenames)],p=modelSubsample$pa,factors=c('Ecotopes','FloodPlain','LandUse','ClimateZones','FloodPlain','PublicLandStatus','WildlandUrbanInterface','LandCover','DominantCanopyCover','PotentialNaturalVegetation','DLC','Vegcover','Totrcv','WHR','cal_fire'))
-    #f <- list("Ecotopes"=levels(modelData$Ecotopes),"FloodPlain"=levels(modelData$FloodPlain),"LandUse"=levels(modelData$LandUse),"ClimateZones"=levels(modelData$ClimateZones),"FloodPlain"=levels(modelData$FloodPlain),"PublicLandStatus"=levels(modelData$PublicLandStatus),"WildlandUrbanInterface"=levels(modelData$WildlandUrbanInterface),"LandCover"=levels(modelData$LandCover),"DominantCanopyCover"=levels(modelData$DominantCanopyCover),"PotentialNaturalVegetation"=levels(modelData$PotentialNaturalVegetation),"DLC"=levels(modelData$DLC),"Vegcover"=levels(modelData$Vegcover),"Totrcv"=levels(modelData$Totrcv),"WHR"=levels(modelData$WHR),"cal_fire"=levels(modelData$cal_fire))
+    xm <- maxent(x=modelSubsample[,env.filtered],p=modelSubsample$pa,factors=names(Filter(is.factor, modelData)))
+    #Get relative importance of environmental layers.
+    XMImportance <- as.data.frame(t(var.importance(xm)))
+    colnames(XMImportance) <- as.character(unlist(XMImportance[1,]))
+    XMImportance <- as.data.frame(XMImportance[2,])
+    XMImportance[] <- lapply(XMImportance, function(x) as.numeric(as.character(x)))
     #Evaluate maxent model.
-    exm <- suppressWarnings(evaluate(p=modelSubsample[modelSubsample$pa==1,c(env.filenames)],a=modelSubsample[modelSubsample$pa==0,c(env.filenames)],model=xm))
+    exm <- suppressWarnings(evaluate(p=modelSubsample[modelSubsample$pa==1,c(env.filtered)],a=modelSubsample[modelSubsample$pa==0,c(env.filtered)],model=xm))
     tmp <- data.frame(matrix(nrow=1,ncol=5))
     colnames(tmp) <- c("species","AUC","SEDI","r","p")
     tmp$species <- species
@@ -182,6 +176,7 @@ SDM <- function(i) {
     tmp$SEDI <- (log(F)-log(H)-log(1-F)+log(1-H))/(log(F)+log(H)+log(1-F)+log(1-H))
     tmp$r <- exm@cor
     tmp$p <- exm@pcor
+    tmp <- cbind(tmp,XMImportance)
     XMEvaluations <- rbind(XMEvaluations,tmp)
     print(paste(species,"auc:",tmp$AUC,"SEDI:",tmp$SEDI,"cor:",tmp$r,"p:",tmp$p))
   }
@@ -204,3 +199,5 @@ for(speciesEval in speciesDone){
 
 #Output MaxEnt model evaluation summary to a single file.
 write.table(XMEvaluationsTotal,"LAIndicatorTaxaNatives.txt",quote=FALSE,sep="\t",row.names = FALSE)
+
+XMEvaluationsTotal <- read.table("LAIndicatorTaxaNatives.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
