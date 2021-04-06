@@ -1,11 +1,14 @@
 rm(list=ls())
 require(rgdal)
+require(rJava)
 require(raster)
+require(dplyr)
 require(dismo) # interface with MaxEnt
 require(raster) # spatial data manipulation
 require(MASS) # for 2D kernel density function
 require(magrittr) # for piping functionality, i.e., %>%
 require(maptools) # reading shapefiles
+require(virtualspecies)
 
 #Set your working directory.  Your's will be different on your machine.
 wd <- "/Users/levisimons/Desktop/Practicum/LASAN/Code"
@@ -46,10 +49,12 @@ colnames(SpeciesFreq) <- c("species","Freq")
 SpeciesFreq$species <- as.character(SpeciesFreq$species)
 SpeciesLocations <- SpeciesLocations[SpeciesLocations$species %in% unique(SpeciesFreq$species),]
 
-#Create a filtered raster stack.
-env.filtered <- read.table("EnvFilteredV1.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
-env.filtered <- c(paste(wd,"/envLayers/",env.filtered$env.filtered,".tif",sep=""))
-env.data <- stack(c(env.filtered))
+#List environmental rasters
+env.files <- list.files(path=paste(wd,"/envLayers",sep=""),pattern=".tif$",full.names=TRUE)
+#Stack environmental layers
+env.data <- stack(c(env.files))
+#Get environmental layer names
+env.filenames <- gsub(paste("^",wd,"/envLayers/",sep=""),"",gsub(".tif","",env.files))
 
 #Create a bias file for illustrating the observation density bias in species observations.
 #This is for downstream use in Maxent modeling for generating background points.
@@ -59,18 +64,12 @@ occur.ras.LA <- raster::mask(occur.ras.tmp,LABoundaries)
 dens <- kde2d(SpeciesLocations$longitude.1, SpeciesLocations$latitude.1, n = c(nrow(occur.ras.LA), ncol(occur.ras.LA)))
 dens.ras <- raster(dens)
 crs(dens.ras) <- CRS(proj4string(LABoundaries))
-writeRaster(dens.ras, "SpeciesBiasV1tmp.tif")
+writeRaster(dens.ras, "SpeciesBiasV1tmp.tif",overwrite=T)
 #To clip and align this raster run the following command in GDAL:
 # gdalwarp -srcnodata -3.39999999999999996e+38 -dstnodata -32768 -of GTiff -co COMPRESS=LZW -t_srs EPSG:2229 -cutline LACityBoundaries.shp -crop_to_cutline -co BIGTIFF=YES -tap -tr 30 30 SpeciesBiasV1tmp.tif SpeciesBiasV1.tif
 # Output file: SpeciesBiasV1.tif
 
 #Remove environmental layers with a high degree of multicollinearity.
-#List environmental rasters
-env.files <- list.files(path=paste(wd,"/envLayers",sep=""),pattern=".tif$",full.names=TRUE)
-#Stack environmental layers
-env.data <- stack(c(env.files))
-#Get environmental layer names
-env.filenames <- gsub(paste("^",wd,"/envLayers/",sep=""),"",gsub(".tif","",env.files))
 #Using r=0.5 as the cutoff: https://onlinelibrary.wiley.com/doi/pdf/10.1111/j.1600-0587.2010.06229.x
 env.filtered <- removeCollinearity(env.data,nb.points = 10000,sample.points = T,select.variables = T,multicollinearity.cutoff = 0.5)
 env.filtered <- as.data.frame(env.filtered)
