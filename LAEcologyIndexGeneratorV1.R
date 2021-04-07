@@ -87,11 +87,15 @@ env.filtered <- read.table("EnvFilteredV1.txt", header=TRUE, sep="\t",as.is=T,sk
 XMLayersSummary <- as.data.frame(colMeans(SpeciesThinned[,env.filtered$env.filtered]))
 colnames(XMLayersSummary) <- c("MeanImportance")
 XMLayersSummary$variable <- row.names(XMLayersSummary)
-env.filtered.further <- XMLayersSummary[XMLayersSummary$MeanImportance >= 2,c("variable")]
+env.filtered.further <- XMLayersSummary[XMLayersSummary$MeanImportance >= 3,c("variable")]
+write.table(as.data.frame(env.filtered.further),"EnvFilteredFurtherV1.txt",quote=FALSE,sep="\t",row.names = FALSE)
 
 #Create a filtered raster stack.
 env.filtered <- c(paste(wd,"/envLayers/",env.filtered.further,".tif",sep=""))
 env.data <- stack(c(env.filtered))
+
+#Read in bias raster, generated here: https://github.com/LASanitation/LASAN/blob/main/LABiasRasterV1.R
+dens.ras <- raster("SpeciesBiasV1.tif")
 
 #Remove the species already evaluated from the next iteration of analysis.
 speciesDone <- list.files(pattern="Prediction(.*?).tif$",full.names=T)
@@ -123,7 +127,10 @@ SDM <- function(i) {
   presvals$pa <- 1
   
   #Create a background point set.
-  absvals <- as.data.frame(raster::extract(env.data,as.data.frame(spsample(LABoundaries,n=20*nrow(presvals),"random"))))
+  #Create background points using bias background layer.
+  bg <- as.data.frame(xyFromCell(dens.ras, sample(which(!is.na(values(dens.ras))), 20*nrow(presvals), prob=values(dens.ras)[!is.na(values(dens.ras))])))
+  colnames(bg) <- c("longitude.1","latitude.1")
+  absvals <- as.data.frame(raster::extract(env.data,bg))
   #Convert NA values to 0.
   absvals[is.na(absvals)] <- 0
   #Remove rows with missing data.
@@ -152,7 +159,7 @@ SDM <- function(i) {
   #Evaluate probability threshold of species detection
   bc.threshold <- threshold(x = exm, stat = "spec_sens")
   
-  r <- raster::predict(env.data, xm,extent=testExtent,na.rm=TRUE,inf.rm=TRUE,factors=names(Filter(is.factor, modelData)),progress='text')
+  r <- dismo::predict(object=xm,x=env.data,extent=testExtent,progress='text')
   #Convert prediction probability raster to a presence/absence prediction.
   rPA <- r > bc.threshold
   writeRaster(rPA,paste("Prediction",species,".tif",sep=""),overwrite=T)
@@ -160,7 +167,7 @@ SDM <- function(i) {
   files=list.files(pattern="Prediction(.*?).tif$",full.names=T)
   if(length(files)==100){
     rs <- raster::stack(files)
-    rs1 <- raster::calc(rs,sum,na.rm=F)
+    rs1 <- raster::calc(rs,sum,na.rm=T)
     writeRaster(rs1,"summary100.tif") 
   }
 }
