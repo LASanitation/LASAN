@@ -2,16 +2,15 @@ rm(list=ls())
 require(rgdal)
 require(rJava)
 require(raster)
-require(parallel)
-require(doParallel)
-require(foreach)
 require(ENMeval)
+require(dplyr)
+require(virtualspecies)
 
 #To deal with java issues
 .jinit()
 
 #Set your working directory.  Your's will be different on your machine.
-wd <- "~/Desktop/Practicum/LASAN/Code"
+wd <- "/Users/levisimons/Desktop/Practicum/LASAN/Code"
 #wd <- "/home1/alsimons/LASAN"
 setwd(wd)
 if(wd=="/home1/alsimons/LASAN"){
@@ -67,13 +66,14 @@ Prevalence <- 30
 SpeciesFreq <- SpeciesFreq[SpeciesFreq$Freq >= Prevalence,]
 colnames(SpeciesFreq) <- c("species","Freq")
 SpeciesFreq$species <- as.character(SpeciesFreq$species)
+SpeciesLocations <- SpeciesLocations[SpeciesLocations$species %in% unique(SpeciesFreq$species),]
 
 #Create a list of species above a certain number of observation points.
 speciesList <- SpeciesFreq$species
 
 #Get the list of species already evaluated.
-speciesDone <- list.files(pattern="MaxentEvaluationNatives(.*?).txt")
-speciesDone <- gsub("MaxentEvaluationNatives","",gsub(".txt","",speciesDone))
+speciesDone <- list.files(pattern="MaxentNativeEvaluation(.*?).txt")
+speciesDone <- gsub("MaxentNativeEvaluation","",gsub(".txt","",speciesDone))
 #Remove the species already evaluated from the next iteration of analysis.
 speciesList <-speciesList[!(speciesList %in% speciesDone)]
 
@@ -83,28 +83,20 @@ all.presvals <- SpeciesLocations[SpeciesLocations$species %in% speciesList,]
 #Specify sampling number for MaxEnt input data.
 sampleNum <- 25
 
-#Remove environmental layers with a high degree of multicollinearity.
-#Only run this once to generate a list of layers with low multicollinearity.
-#List environmental rasters
-#env.files <- list.files(path=paste(wd,"/envLayers",sep=""),pattern=".tif$",full.names=TRUE)
-#Stack environmental layers
-#env.data <- stack(c(env.files))
-#Get environmental layer names
-#env.filenames <- gsub(paste("^",wd,"/envLayers/",sep=""),"",gsub(".tif","",env.files))
-#env.filtered <- removeCollinearity(env.data,nb.points = 10000,sample.points = T,select.variables = T,multicollinearity.cutoff = 0.6)
-#env.filtered <- as.data.frame(env.filtered)
-#write.table(env.filtered,"EnvFilteredV1.txt",quote=FALSE,sep="\t",row.names = FALSE)
-
 #Create a filtered raster stack.
-env.filtered <- read.table("EnvFilteredV1.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
+#Filtered raster list generated here: https://github.com/LASanitation/LASAN/blob/main/LABiasRasterV2.R
+env.filtered <- read.table("EnvFilteredV2.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
 env.filtered <- c(paste(wd,"/envLayers/",env.filtered$env.filtered,".tif",sep=""))
 env.data <- stack(c(env.filtered))
+
+#Read in bias raster, generated here: https://github.com/LASanitation/LASAN/blob/main/LABiasRasterV2.R
+dens.ras <- raster("SpeciesBiasV2.tif")
 
 SDM <- function(i) {
   #Randomly select a species from the list of those not already analyzed.
   #Get the list of species already evaluated.
-  speciesDone <- list.files(pattern="MaxentEvaluationNatives(.*?).txt")
-  speciesDone <- gsub("MaxentEvaluationNatives","",gsub(".txt","",speciesDone))
+  speciesDone <- list.files(pattern="MaxentNativeEvaluation(.*?).txt")
+  speciesDone <- gsub("MaxentNativeEvaluation","",gsub(".txt","",speciesDone))
   #Remove the species already evaluated from the next iteration of analysis.
   speciesList <-speciesList[!(speciesList %in% speciesDone)]
   species <- speciesList[sample(length(speciesList))[1]]
@@ -124,7 +116,10 @@ SDM <- function(i) {
   presvals$pa <- 1
   
   #Create a background point set.
-  absvals <- as.data.frame(raster::extract(env.data,as.data.frame(spsample(LABoundaries,n=20*nrow(presvals),"random"))))
+  #Create background points using bias background layer.
+  bg <- as.data.frame(xyFromCell(dens.ras, sample(which(!is.na(values(dens.ras))), 20*nrow(presvals), prob=values(dens.ras)[!is.na(values(dens.ras))])))
+  colnames(bg) <- c("longitude.1","latitude.1")
+  absvals <- as.data.frame(raster::extract(env.data,bg))
   #Convert NA values to 0.
   absvals[is.na(absvals)] <- 0
   #Remove rows with missing data.
@@ -142,7 +137,6 @@ SDM <- function(i) {
   modelData[,colnames(modelData) %in% envFactors] <- lapply(modelData[,colnames(modelData) %in% envFactors],factor)
   env.filtered <- gsub(paste("^",wd,"/envLayers/",sep=""),"",gsub(".tif","",env.filtered))
   modelData <- modelData[,c(env.filtered,"pa")]
-  
   #Create dataframe to store MaxEnt model evaluation metrics.
   XMEvaluations <- data.frame()
   #Run MaxEnt model using subsamples of data
@@ -154,40 +148,43 @@ SDM <- function(i) {
     absenceSubsample <- absenceSubsample[sample(nrow(absenceSubsample),20*sampleNum),]
     modelSubsample <- rbind(presenceSubsample,absenceSubsample)
     #maxent()
-    xm <- maxent(x=modelSubsample[,env.filtered],p=modelSubsample$pa,factors=names(Filter(is.factor, modelData)))
-    #Get relative importance of environmental layers.
-    XMImportance <- as.data.frame(t(var.importance(xm)))
-    colnames(XMImportance) <- as.character(unlist(XMImportance[1,]))
-    XMImportance <- as.data.frame(XMImportance[2,])
-    XMImportance[] <- lapply(XMImportance, function(x) as.numeric(as.character(x)))
-    #Evaluate maxent model.
-    exm <- suppressWarnings(evaluate(p=modelSubsample[modelSubsample$pa==1,c(env.filtered)],a=modelSubsample[modelSubsample$pa==0,c(env.filtered)],model=xm))
-    tmp <- data.frame(matrix(nrow=1,ncol=5))
-    colnames(tmp) <- c("species","AUC","SEDI","r","p")
-    tmp$species <- species
-    tmp$AUC <- exm@auc
-    #SEDI: https://natureconservation.pensoft.net/article/33918/
-    a <- mean(exm@TPR,na.rm=T)
-    b <- mean(exm@FPR,na.rm=T)
-    c <- mean(exm@FNR,na.rm=T)
-    d <- mean(exm@TNR,na.rm=T)
-    H <- a/(a+c)
-    F <- b/(b+d)
-    tmp$SEDI <- (log(F)-log(H)-log(1-F)+log(1-H))/(log(F)+log(H)+log(1-F)+log(1-H))
-    tmp$r <- exm@cor
-    tmp$p <- exm@pcor
-    tmp <- cbind(tmp,XMImportance)
-    XMEvaluations <- rbind(XMEvaluations,tmp)
-    print(paste(species,"auc:",tmp$AUC,"SEDI:",tmp$SEDI,"cor:",tmp$r,"p:",tmp$p))
+    if(nrow(modelSubsample) > 0){
+      xm <- maxent(x=modelSubsample[,env.filtered],p=modelSubsample$pa,factors=names(Filter(is.factor, modelSubsample)))
+      #Get relative importance of environmental layers.
+      XMImportance <- as.data.frame(t(var.importance(xm)))
+      colnames(XMImportance) <- as.character(unlist(XMImportance[1,]))
+      XMImportance <- as.data.frame(XMImportance[2,])
+      XMImportance[] <- lapply(XMImportance, function(x) as.numeric(as.character(x)))
+      #Evaluate maxent model.
+      exm <- suppressWarnings(evaluate(p=modelSubsample[modelSubsample$pa==1,c(env.filtered)],a=modelSubsample[modelSubsample$pa==0,c(env.filtered)],model=xm))
+      tmp <- data.frame(matrix(nrow=1,ncol=5))
+      colnames(tmp) <- c("species","AUC","SEDI","r","p")
+      tmp$species <- species
+      tmp$AUC <- exm@auc
+      #SEDI: https://natureconservation.pensoft.net/article/33918/
+      a <- mean(exm@TPR,na.rm=T)
+      b <- mean(exm@FPR,na.rm=T)
+      c <- mean(exm@FNR,na.rm=T)
+      d <- mean(exm@TNR,na.rm=T)
+      H <- a/(a+c)
+      F <- b/(b+d)
+      tmp$SEDI <- (log(F)-log(H)-log(1-F)+log(1-H))/(log(F)+log(H)+log(1-F)+log(1-H))
+      tmp$r <- exm@cor
+      tmp$p <- exm@pcor
+      tmp <- cbind(tmp,XMImportance)
+      XMEvaluations <- rbind(XMEvaluations,tmp)
+      print(paste(species,"auc:",tmp$AUC,"SEDI:",tmp$SEDI,"cor:",tmp$r,"p:",tmp$p))
+    }
   }
-  write.table(XMEvaluations,paste("MaxentEvaluationNatives",species,".txt",sep=""),quote=FALSE,sep="\t",row.names = FALSE)
+  write.table(XMEvaluations,paste("MaxentNativeEvaluation",species,".txt",sep=""),quote=FALSE,sep="\t",row.names = FALSE)
+  rm(xm,exm,modelData,tmp,presvals,absvals,XMEvaluations)
 }
 
 #Run MaxEnt evaluations on all of the species.
 lapply(1:length(speciesList),SDM)
 
 ##Get the list of species already evaluated.
-speciesDone <- list.files(pattern="MaxentEvaluationNatives(.*?).txt")
+speciesDone <- list.files(pattern="MaxentNativeEvaluation(.*?).txt")
 ##Summarize all evaluations so each row is a unique species with all of its associated maxent model evaluations.
 XMEvaluationsTotal <- data.frame()
 for(speciesEval in speciesDone){
@@ -198,6 +195,4 @@ for(speciesEval in speciesDone){
 }
 
 #Output MaxEnt model evaluation summary to a single file.
-write.table(XMEvaluationsTotal,"LAIndicatorTaxaNatives.txt",quote=FALSE,sep="\t",row.names = FALSE)
-
-XMEvaluationsTotal <- read.table("LAIndicatorTaxaNatives.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
+write.table(XMEvaluationsTotal,"LANativeIndicatorTaxa.txt",quote=FALSE,sep="\t",row.names = FALSE)
