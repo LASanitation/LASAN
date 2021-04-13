@@ -3,9 +3,10 @@ require(rgdal)
 require(raster)
 require(foreach)
 require(ENMeval)
+require(spThin)
 
 #Set your working directory.  Your's will be different on your machine.
-wd <- "~/Desktop/Practicum/LASAN/Code"
+wd <- "/Users/levisimons/Desktop/Practicum/LASAN/Code"
 #wd <- "/home1/alsimons/LASAN"
 setwd(wd)
 if(wd=="/home1/alsimons/LASAN"){
@@ -25,6 +26,7 @@ if(wd=="~/Desktop/Practicum/LASAN/Code"){
   require(dismo)
 }
 
+set.seed(1)
 #Read in raw GBIF species data.
 SpeciesInput <- read.table("0175678-200613084148143.csv", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
 SpeciesInput <- SpeciesInput[SpeciesInput$taxonRank=="SPECIES",]
@@ -51,28 +53,64 @@ SpeciesLocations <- SpeciesLocations[LABoundaries,]
 #Convert LA species observations back to a dataframe.
 SpeciesLocations <- as.data.frame(SpeciesLocations)
 
-#Generate random background points for MaxEnt modeling.
-bgPoints <- as.data.frame(spsample(LABoundaries,n=100000,"random"))
-#Get all species locations.
-all.obs.data <- SpeciesLocations[,c("longitude.1","latitude.1")]
-#Remove any potential overlap between random background points and actual observations.
-bgPoints <- bgPoints[!(bgPoints$x %in% all.obs.data$decimalLongitude.1) & !(bgPoints$y %in% all.obs.data$decimalLatitude.1),]
-colnames(bgPoints) <- c("longitude.1","latitude.1")
+#Get list of Los Angeles county native plants from CalFlora.
+LAPlants <- read.table("CalPlants.csv", header=TRUE, sep=",",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
+#Get list of Los Angeles county native animals as developed for the LA city biodiversity index.
+LAAnimals <- read.table("CalAnimals.csv", header=TRUE, sep=",",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
+#Create a merged LA natives list.
+LASpecies <- rbind(LAPlants,LAAnimals)
 
-#List environmental rasters
-env.files <- list.files(path=paste(wd,"/envLayers",sep=""),pattern=".tif$",full.names=TRUE)
-#Stack environmental layers
-env.data <- stack(c(env.files))
-#Get environmental layer names
-env.filenames <- gsub("^./","",gsub(".tif","",env.files))
+#Filter LA species data by prevalence.
+SpeciesLocations <- SpeciesLocations[SpeciesLocations$species %in% names(table(SpeciesLocations$species))[table(SpeciesLocations$species) >= 30],]
+
+#Spatially thin species observations.
+SpeciesThinned <- data.frame()
+for(taxon in unique(SpeciesLocations$species)){
+  TaxonLocations <- SpeciesLocations[SpeciesLocations$species==taxon,]
+  TaxonThinned <- as.data.frame(thin(TaxonLocations,lat.col="latitude",long.col="longitude",spec.col="species",thin.par=0.5,reps=100,write.files=F,write.log.file=F,locs.thinned.list.return=T,out.dir=wd)[100])
+  SpeciesThinnedTmp <- TaxonLocations[TaxonLocations$latitude %in% TaxonThinned$Latitude & TaxonLocations$longitude %in% TaxonThinned$Longitude,]
+  if(nrow(SpeciesThinnedTmp) >= 30){
+    SpeciesThinned <- rbind(SpeciesThinned,SpeciesThinnedTmp)
+  }
+}
 
 #Read in the list of species, and their MaxEnt model evaluations, as generated from here: https://github.com/LASanitation/LASAN/blob/main/LAIndicatorTaxaV2.R
-speciesList <- read.table("LAIndicatorTaxaNatives.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
-#Filter this list so only the species with the highest SEDI scores are retained as indicators.
-speciesList <- dplyr::top_n(speciesList,100,SEDI)$species
+XMEvaluationsTotal <- read.table("LANativeIndicatorTaxa.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
+
+#Merge in evaluation data with species observations.
+SpeciesThinned <- dplyr::left_join(SpeciesThinned,XMEvaluationsTotal)
+
+#Create a list so only the species with the highest SEDI scores are retained as indicators.
+tmp <- SpeciesThinned[,c("SEDI","species")]
+tmp <- tmp[!duplicated(tmp),]
+speciesList <- dplyr::top_n(tmp,100,SEDI)$species
+SpeciesThinned <- SpeciesThinned[SpeciesThinned$species %in% speciesList,]
+
+#This filtered environmental list was generated here: https://github.com/LASanitation/LASAN/blob/main/LAIndicatorTaxaV1.R
+env.filtered <- read.table("EnvFilteredV2.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
+
+#Filter environmental list further by their mean relative importance in 
+#maxent models for all indicator species.
+XMLayersSummary <- as.data.frame(colMeans(SpeciesThinned[,env.filtered$env.filtered]))
+colnames(XMLayersSummary) <- c("MeanImportance")
+XMLayersSummary$variable <- row.names(XMLayersSummary)
+env.filtered.further <- XMLayersSummary[XMLayersSummary$MeanImportance >= 3,c("variable")]
+write.table(as.data.frame(env.filtered.further),"EnvFilteredFurtherV2.txt",quote=FALSE,sep="\t",row.names = FALSE)
+
+#Create a filtered raster stack.
+env.filtered <- c(paste(wd,"/envLayers/",env.filtered.further,".tif",sep=""))
+env.data <- stack(c(env.filtered))
+
+#Read in bias raster, generated here: https://github.com/LASanitation/LASAN/blob/main/LABiasRasterV1.R
+dens.ras <- raster("SpeciesBiasV2.tif")
+
+#Remove the species already evaluated from the next iteration of analysis.
+speciesDone <- list.files(pattern="PredictionNatives(.*?).tif$",full.names=T)
+speciesList <-speciesList[!(speciesList %in% speciesDone)]
 
 SDM <- function(i) {
   #Randomly select a species from the list of those not already analyzed.
+  set.seed(as.numeric(Sys.time()))
   #Get the list of species already evaluated.
   speciesDone <- list.files(pattern="PredictionNatives(.*?).tif$",full.names=T)
   speciesDone <- gsub("^./PredictionNatives","",gsub(".tif","",speciesDone))
@@ -81,10 +119,10 @@ SDM <- function(i) {
   species <- speciesList[sample(length(speciesList))[1]]
   
   #Extract observation locations for a given species.
-  obs.data <- SpeciesLocations[SpeciesLocations$species==species,c("longitude.1","latitude.1")]
+  obs.data <- SpeciesThinned[SpeciesThinned$species==species,c("longitude.1","latitude.1")]
   
   # Initialize data containing environmental layer values at presence locations.
-  presvals <- as.data.frame(raster::extract(stack(env.files),obs.data))
+  presvals <- as.data.frame(raster::extract(env.data,obs.data))
   #Convert NA values to 0.
   presvals[is.na(presvals)] <- 0
   #Remove rows with missing data.
@@ -96,8 +134,10 @@ SDM <- function(i) {
   presvals$pa <- 1
   
   #Create a background point set.
-  abs.data <- bgPoints[sample(nrow(bgPoints),20*nrow(presvals)),]
-  absvals <- as.data.frame(raster::extract(stack(env.files),abs.data))
+  #Create background points using bias background layer.
+  bg <- as.data.frame(xyFromCell(dens.ras, sample(which(!is.na(values(dens.ras))), 20*nrow(presvals), prob=values(dens.ras)[!is.na(values(dens.ras))])))
+  colnames(bg) <- c("longitude.1","latitude.1")
+  absvals <- as.data.frame(raster::extract(env.data,bg))
   #Convert NA values to 0.
   absvals[is.na(absvals)] <- 0
   #Remove rows with missing data.
@@ -111,42 +151,31 @@ SDM <- function(i) {
   #Merge presence/absence data
   #Set factor variables.
   modelData <- rbind(presvals,absvals)
-  modelData$LandUse <- factor(modelData$LandUse,levels=unique(modelData$LandUse))
-  modelData$Ecotopes <- factor(modelData$Ecotopes,levels=unique(modelData$Ecotopes))
-  modelData$FloodPlain <- factor(modelData$FloodPlain,levels=unique(modelData$FloodPlain))
-  modelData$ClimateZones <- factor(modelData$ClimateZones, levels=unique(modelData$ClimateZones))
-  modelData$FloodPlain <- factor(modelData$FloodPlain, levels=unique(modelData$FloodPlain))
-  modelData$PublicLandStatus <- factor(modelData$PublicLandStatus, levels=unique(modelData$PublicLandStatus))
-  modelData$WildlandUrbanInterface <- factor(modelData$WildlandUrbanInterface, levels=unique(modelData$WildlandUrbanInterface))
-  modelData$LandCover <- factor(modelData$LandCover, levels=unique(modelData$LandCover))
-  modelData$DominantCanopyCover <- factor(modelData$DominantCanopyCover, levels=unique(modelData$DominantCanopyCover))
-  modelData$PotentialNaturalVegetation <- factor(modelData$PotentialNaturalVegetation, levels=unique(modelData$PotentialNaturalVegetation))
-  modelData$DLC <- factor(modelData$DLC, levels=unique(modelData$DLC))
-  modelData$Vegcover <- factor(modelData$Vegcover, levels=unique(modelData$Vegcover))
-  modelData$Totrcv <- factor(modelData$Totrcv, levels=unique(modelData$Totrcv))
-  modelData$WHR <- factor(modelData$WHR, levels=unique(modelData$WHR))
-  modelData$cal_fire <- factor(modelData$cal_fire, levels=unique(modelData$cal_fire))
+  envFactors <- c("cal_fire","ClimateZones","DLC","DominantCanopyCover","EcoRegion","Ecotopes","FloodPlain","LandCover","LandUse","PublicLandStatus","Totrcv","Vegcover","WHR","WildlandUrbanInterface")
+  modelData[,colnames(modelData) %in% envFactors] <- lapply(modelData[,colnames(modelData) %in% envFactors],factor)
+  #env.filtered <- gsub(paste("^",wd,"/envLayers/",sep=""),"",gsub(".tif","",env.filtered))
+  #modelData <- modelData[,c(env.filtered,"pa")]
   
   #Get geographic extent for running the SDM.
-  testExtent <- extent(env.data$Aspect)
+  testExtent <- extent(env.data[[1]])
   #Run MaxEnt model
-  xm <- maxent(x=modelData[,c(env.filenames)],p=modelData$pa,factors=c('Ecotopes','FloodPlain','LandUse','ClimateZones','FloodPlain','PublicLandStatus','WildlandUrbanInterface','LandCover','DominantCanopyCover','PotentialNaturalVegetation','DLC','Vegcover','Totrcv','WHR','cal_fire'))
-  f <- list("Ecotopes"=levels(modelData$Ecotopes),"FloodPlain"=levels(modelData$FloodPlain),"LandUse"=levels(modelData$LandUse),"ClimateZones"=levels(modelData$ClimateZones),"FloodPlain"=levels(modelData$FloodPlain),"PublicLandStatus"=levels(modelData$PublicLandStatus),"WildlandUrbanInterface"=levels(modelData$WildlandUrbanInterface),"LandCover"=levels(modelData$LandCover),"DominantCanopyCover"=levels(modelData$DominantCanopyCover),"PotentialNaturalVegetation"=levels(modelData$PotentialNaturalVegetation),"DLC"=levels(modelData$DLC),"Vegcover"=levels(modelData$Vegcover),"Totrcv"=levels(modelData$Totrcv),"WHR"=levels(modelData$WHR),"cal_fire"=levels(modelData$cal_fire))
+  xm <- maxent(x=modelData[,c(env.filtered.further)],p=modelData$pa,factors=names(Filter(is.factor, modelData)))
+  #f <- list("Ecotopes"=levels(modelData$Ecotopes),"FloodPlain"=levels(modelData$FloodPlain),"LandUse"=levels(modelData$LandUse),"ClimateZones"=levels(modelData$ClimateZones),"FloodPlain"=levels(modelData$FloodPlain),"PublicLandStatus"=levels(modelData$PublicLandStatus),"WildlandUrbanInterface"=levels(modelData$WildlandUrbanInterface),"LandCover"=levels(modelData$LandCover),"DominantCanopyCover"=levels(modelData$DominantCanopyCover),"PotentialNaturalVegetation"=levels(modelData$PotentialNaturalVegetation),"DLC"=levels(modelData$DLC),"Vegcover"=levels(modelData$Vegcover),"Totrcv"=levels(modelData$Totrcv),"WHR"=levels(modelData$WHR),"cal_fire"=levels(modelData$cal_fire))
   #Evaluate maxent model.
-  exm <- suppressWarnings(evaluate(modelData[modelData$pa==1,c(env.filenames)],modelData[modelData$pa==0,c(env.filenames)],xm))
+  exm <- suppressWarnings(evaluate(modelData[modelData$pa==1,c(env.filtered.further)],modelData[modelData$pa==0,c(env.filtered.further)],xm))
   #Evaluate probability threshold of species detection
   bc.threshold <- threshold(x = exm, stat = "spec_sens")
   
-  r <- raster::predict(env.data, xm,extent=testExtent,na.rm=TRUE,inf.rm=TRUE,factors=f,progress='text')
-  #Convert prediction probability raster to a presence/absence prediction.
+  r <- dismo::predict(object=xm,x=env.data,extent=testExtent,progress='text')
+  #Convert PredictionNatives probability raster to a presence/absence PredictionNatives.
   rPA <- r > bc.threshold
   writeRaster(rPA,paste("PredictionNatives",species,".tif",sep=""),overwrite=T)
   #Summarize all map layers into a single layer representing the LA Ecological Index.
   files=list.files(pattern="PredictionNatives(.*?).tif$",full.names=T)
-  if(length(files)==100){
+  if(length(files)==length(speciesList)){
     rs <- raster::stack(files)
     rs1 <- raster::calc(rs,sum,na.rm=T)
-    writeRaster(rs1,"summaryNatives100.tif") 
+    writeRaster(rs1,paste("summary",length(speciesList),".tif",sep="")) 
   }
 }
 
