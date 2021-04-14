@@ -11,7 +11,7 @@ require(virtualspecies)
 
 #Set your working directory.  Your's will be different on your machine.
 wd <- "/Users/levisimons/Desktop/Practicum/LASAN/Code"
-#wd <- "/home1/alsimons/LASAN"
+wd <- "/home1/alsimons/LASAN"
 setwd(wd)
 if(wd=="/home1/alsimons/LASAN"){
   rasterOptions(todisk = FALSE)
@@ -25,7 +25,7 @@ if(wd=="~/Desktop/Practicum/LASAN/Code"){
 }
 
 #Read in raw GBIF species data.
-SpeciesInput <- read.table("0175678-200613084148143.csv", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
+SpeciesInput <- read.table("0175678-200613084148143.csv", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8-BOM")
 SpeciesInput <- SpeciesInput[SpeciesInput$taxonRank=="SPECIES",]
 names(SpeciesInput)[names(SpeciesInput)=="decimalLatitude"] <- "latitude"
 names(SpeciesInput)[names(SpeciesInput)=="decimalLongitude"] <- "longitude"
@@ -51,9 +51,14 @@ SpeciesLocations <- SpeciesLocations[LABoundaries,]
 SpeciesLocations <- as.data.frame(SpeciesLocations)
 
 #Get list of Los Angeles county native plants from CalFlora.
-LAPlants <- read.table("CalPlants.csv", header=TRUE, sep=",",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
+LAPlants <- read.table("CalPlants.csv", header=TRUE, sep=",",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8-BOM")
+#Get list of invasive plants from https://www.cal-ipc.org/plants/inventory/
+InvasivePlants <- read.table("InvasivePlants.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8-BOM")
+#Remove invasive plants from LA native plants.
+LAPlants <- as.data.frame(LAPlants[!(LAPlants$species %in% InvasivePlants$ScienctificName),'species'])
+colnames(LAPlants) <- c('species')
 #Get list of Los Angeles county native animals as developed for the LA city biodiversity index.
-LAAnimals <- read.table("CalAnimals.csv", header=TRUE, sep=",",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
+LAAnimals <- read.table("CalAnimals.csv", header=TRUE, sep=",",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8-BOM")
 #Create a merged LA natives list.
 LASpecies <- rbind(LAPlants,LAAnimals)
 
@@ -66,7 +71,7 @@ Prevalence <- 30
 SpeciesFreq <- SpeciesFreq[SpeciesFreq$Freq >= Prevalence,]
 colnames(SpeciesFreq) <- c("species","Freq")
 SpeciesFreq$species <- as.character(SpeciesFreq$species)
-SpeciesLocations <- SpeciesLocations[SpeciesLocations$species %in% unique(SpeciesFreq$species),]
+SpeciesLocations <- SpeciesLocations[SpeciesLocations$species %in% unique(LASpecies$species),]
 
 #Create a list of species above a certain number of observation points.
 speciesList <- SpeciesFreq$species
@@ -85,7 +90,7 @@ sampleNum <- 25
 
 #Create a filtered raster stack.
 #Filtered raster list generated here: https://github.com/LASanitation/LASAN/blob/main/LABiasRasterV2.R
-env.filtered <- read.table("EnvFilteredV2.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
+env.filtered <- read.table("EnvFilteredV2.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8-BOM")
 env.filtered <- c(paste(wd,"/envLayers/",env.filtered$env.filtered,".tif",sep=""))
 env.data <- stack(c(env.filtered))
 
@@ -188,7 +193,7 @@ speciesDone <- list.files(pattern="MaxentNativeEvaluation(.*?).txt")
 ##Summarize all evaluations so each row is a unique species with all of its associated maxent model evaluations.
 XMEvaluationsTotal <- data.frame()
 for(speciesEval in speciesDone){
-  speciesEvalInput <- read.table(speciesEval, header=T, sep="\t",as.is=T,skip=0,fill=T,quote="\"",check.names=F,encoding = "UTF-8")
+  speciesEvalInput <- read.table(speciesEval, header=T, sep="\t",as.is=T,skip=0,fill=T,quote="\"",check.names=F,encoding = "UTF-8-BOM")
   tmp <- speciesEvalInput %>% dplyr::summarise_if(is.numeric,mean,na.rm=T)
   tmp$species <- unique(speciesEvalInput$species)
   XMEvaluationsTotal <- rbind(XMEvaluationsTotal,tmp)
