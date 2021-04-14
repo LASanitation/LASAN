@@ -54,9 +54,14 @@ SpeciesLocations <- SpeciesLocations[LABoundaries,]
 SpeciesLocations <- as.data.frame(SpeciesLocations)
 
 #Get list of Los Angeles county native plants from CalFlora.
-LAPlants <- read.table("CalPlants.csv", header=TRUE, sep=",",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
+LAPlants <- read.table("CalPlants.csv", header=TRUE, sep=",",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8-BOM")
+#Get list of invasive plants from https://www.cal-ipc.org/plants/inventory/
+InvasivePlants <- read.table("InvasivePlants.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8-BOM")
+#Remove invasive plants from LA native plants.
+LAPlants <- as.data.frame(LAPlants[!(LAPlants$species %in% InvasivePlants$ScienctificName),'species'])
+colnames(LAPlants) <- c('species')
 #Get list of Los Angeles county native animals as developed for the LA city biodiversity index.
-LAAnimals <- read.table("CalAnimals.csv", header=TRUE, sep=",",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
+LAAnimals <- read.table("CalAnimals.csv", header=TRUE, sep=",",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8-BOM")
 #Create a merged LA natives list.
 LASpecies <- rbind(LAPlants,LAAnimals)
 
@@ -83,15 +88,16 @@ SpeciesThinned <- dplyr::left_join(SpeciesThinned,XMEvaluationsTotal)
 #Create a list so only the species with the highest SEDI scores are retained as indicators.
 tmp <- SpeciesThinned[,c("SEDI","species")]
 tmp <- tmp[!duplicated(tmp),]
-speciesList <- dplyr::top_n(tmp,100,SEDI)$species
+topSpecies <- 50
+speciesList <- dplyr::top_n(tmp,topSpecies,SEDI)$species
 SpeciesThinned <- SpeciesThinned[SpeciesThinned$species %in% speciesList,]
 
-#This filtered environmental list was generated here: https://github.com/LASanitation/LASAN/blob/main/LAIndicatorTaxaV1.R
+#This filtered environmental list was generated here: https://github.com/LASanitation/LASAN/blob/main/LAIndicatorTaxaV2.R
 env.filtered <- read.table("EnvFilteredV2.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
 
 #Filter environmental list further by their mean relative importance in 
 #maxent models for all indicator species.
-XMLayersSummary <- as.data.frame(colMeans(SpeciesThinned[,env.filtered$env.filtered]))
+XMLayersSummary <- as.data.frame(colMeans(SpeciesThinned[,colnames(SpeciesThinned) %in% c(env.filtered$env.filtered)]))
 colnames(XMLayersSummary) <- c("MeanImportance")
 XMLayersSummary$variable <- row.names(XMLayersSummary)
 env.filtered.further <- XMLayersSummary[XMLayersSummary$MeanImportance >= 3,c("variable")]
@@ -172,7 +178,7 @@ SDM <- function(i) {
   writeRaster(rPA,paste("PredictionNatives",species,".tif",sep=""),overwrite=T)
   #Summarize all map layers into a single layer representing the LA Ecological Index.
   files=list.files(pattern="PredictionNatives(.*?).tif$",full.names=T)
-  if(length(files)==length(speciesList)){
+  if(length(files)==topSpecies){
     rs <- raster::stack(files)
     rs1 <- raster::calc(rs,sum,na.rm=T)
     writeRaster(rs1,paste("summary",length(speciesList),".tif",sep="")) 
