@@ -10,6 +10,7 @@ require(magrittr) # for piping functionality, i.e., %>%
 require(maptools) # reading shapefiles
 require(virtualspecies)
 
+set.seed(1)
 #Set your working directory.  Your's will be different on your machine.
 wd <- "/Users/levisimons/Desktop/Practicum/LASAN/Code"
 #wd <- "/home1/alsimons/LASAN"
@@ -41,6 +42,22 @@ SpeciesLocations <- SpeciesLocations[LABoundaries,]
 #Convert LA species observations back to a dataframe.
 SpeciesLocations <- as.data.frame(SpeciesLocations)
 
+#Get list of Los Angeles county native plants from CalFlora.
+LAPlants <- read.table("CalPlants.csv", header=TRUE, sep=",",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8-BOM")
+#Get list of invasive plants from https://www.cal-ipc.org/plants/inventory/
+InvasivePlants <- read.table("InvasivePlants.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8-BOM")
+#Remove invasive plants from LA native plants.
+LAPlants <- as.data.frame(LAPlants[!(LAPlants$species %in% InvasivePlants$ScienctificName),'species'])
+colnames(LAPlants) <- c('species')
+#Get list of Los Angeles county native animals as developed for the LA city biodiversity index.
+LAAnimals <- read.table("CalAnimals.csv", header=TRUE, sep=",",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8-BOM")
+#Create a merged LA natives list.
+LASpecies <- rbind(LAPlants,LAAnimals)
+LASpecies$species <- as.character(LASpecies$species)
+
+#Filter our native species to only leave non-native ones.
+SpeciesLocations <- SpeciesLocations[!(SpeciesLocations$species %in% LASpecies$species),]
+
 #Filter LA species observations by time and prevalence.
 SpeciesFreq <- as.data.frame(table(SpeciesLocations[SpeciesLocations$year<=2020 & SpeciesLocations$year>=2010,"species"]))
 Prevalence <- 30
@@ -71,7 +88,7 @@ writeRaster(dens.ras, "SpeciesBiasV1tmp.tif",overwrite=T)
 
 #Remove environmental layers with a high degree of multicollinearity.
 #Using r=0.5 as the cutoff: https://onlinelibrary.wiley.com/doi/pdf/10.1111/j.1600-0587.2010.06229.x
-env.filtered <- removeCollinearity(env.data,nb.points = 10000,sample.points = T,select.variables = T,multicollinearity.cutoff = 0.5)
+env.filtered <- removeCollinearity(env.data,nb.points = 100000,sample.points = T,select.variables = T,multicollinearity.cutoff = 0.5)
 env.filtered <- as.data.frame(env.filtered)
 #Save filtered list of environmental variables.
 write.table(env.filtered,"EnvFilteredV1.txt",quote=FALSE,sep="\t",row.names = FALSE)
