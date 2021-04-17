@@ -50,6 +50,22 @@ SpeciesLocations <- SpeciesLocations[LABoundaries,]
 #Convert LA species observations back to a dataframe.
 SpeciesLocations <- as.data.frame(SpeciesLocations)
 
+#Get list of Los Angeles county native plants from CalFlora.
+LAPlants <- read.table("CalPlants.csv", header=TRUE, sep=",",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8-BOM")
+#Get list of invasive plants from https://www.cal-ipc.org/plants/inventory/
+InvasivePlants <- read.table("InvasivePlants.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8-BOM")
+#Remove invasive plants from LA native plants.
+LAPlants <- as.data.frame(LAPlants[!(LAPlants$species %in% InvasivePlants$ScienctificName),'species'])
+colnames(LAPlants) <- c('species')
+#Get list of Los Angeles county native animals as developed for the LA city biodiversity index.
+LAAnimals <- read.table("CalAnimals.csv", header=TRUE, sep=",",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8-BOM")
+#Create a merged LA natives list.
+LASpecies <- rbind(LAPlants,LAAnimals)
+LASpecies$species <- as.character(LASpecies$species)
+
+#Filter our native species to only leave non-native ones.
+SpeciesLocations <- SpeciesLocations[!(SpeciesLocations$species %in% LASpecies$species),]
+
 #Filter LA species observations by time and prevalence.
 SpeciesFreq <- as.data.frame(table(SpeciesLocations[SpeciesLocations$year<=2020 & SpeciesLocations$year>=2010,"species"]))
 Prevalence <- 30
