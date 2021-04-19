@@ -88,7 +88,7 @@ SpeciesThinned <- dplyr::left_join(SpeciesThinned,XMEvaluationsTotal)
 #Create a list so only the species with the highest SEDI scores are retained as indicators.
 tmp <- SpeciesThinned[,c("SEDI","species")]
 tmp <- tmp[!duplicated(tmp),]
-topSpecies <- 50
+topSpecies <- 25
 speciesList <- dplyr::top_n(tmp,topSpecies,SEDI)$species
 SpeciesThinned <- SpeciesThinned[SpeciesThinned$species %in% speciesList,]
 
@@ -181,7 +181,7 @@ SDM <- function(i) {
   if(length(files)==topSpecies){
     rs <- raster::stack(files)
     rs1 <- raster::calc(rs,sum,na.rm=T)
-    writeRaster(rs1,paste("summary",length(speciesList),".tif",sep="")) 
+    writeRaster(rs1,paste("summary",topSpecies,".tif",sep="")) 
   }
 }
 
