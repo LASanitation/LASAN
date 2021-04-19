@@ -11,6 +11,7 @@ require(maptools) # reading shapefiles
 require(virtualspecies)
 
 #Set your working directory.  Your's will be different on your machine.
+set.seed(1)
 wd <- "/Users/levisimons/Desktop/Practicum/LASAN/Code"
 #wd <- "/home1/alsimons/LASAN"
 setwd(wd)
@@ -86,7 +87,7 @@ writeRaster(dens.ras, "SpeciesBiasV2tmp.tif",overwrite=T)
 
 #Remove environmental layers with a high degree of multicollinearity.
 #Using r=0.5 as the cutoff: https://onlinelibrary.wiley.com/doi/pdf/10.1111/j.1600-0587.2010.06229.x
-env.filtered <- removeCollinearity(env.data,nb.points = 10000,sample.points = T,select.variables = T,multicollinearity.cutoff = 0.5)
+env.filtered <- removeCollinearity(env.data,nb.points = 100000,sample.points = T,select.variables = T,multicollinearity.cutoff = 0.5)
 env.filtered <- as.data.frame(env.filtered)
 #Save filtered list of environmental variables.
 write.table(env.filtered,"EnvFilteredV2.txt",quote=FALSE,sep="\t",row.names = FALSE)
