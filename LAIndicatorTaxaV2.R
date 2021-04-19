@@ -61,6 +61,7 @@ colnames(LAPlants) <- c('species')
 LAAnimals <- read.table("CalAnimals.csv", header=TRUE, sep=",",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8-BOM")
 #Create a merged LA natives list.
 LASpecies <- rbind(LAPlants,LAAnimals)
+LASpecies$species <- as.character(LASpecies$species)
 
 #Filter data to only contain LA natives.
 SpeciesLocations <- SpeciesLocations[SpeciesLocations$species %in% LASpecies$species,]
@@ -71,7 +72,7 @@ Prevalence <- 30
 SpeciesFreq <- SpeciesFreq[SpeciesFreq$Freq >= Prevalence,]
 colnames(SpeciesFreq) <- c("species","Freq")
 SpeciesFreq$species <- as.character(SpeciesFreq$species)
-SpeciesLocations <- SpeciesLocations[SpeciesLocations$species %in% unique(LASpecies$species),]
+SpeciesLocations <- SpeciesLocations[SpeciesLocations$species %in% unique(SpeciesFreq$species),]
 
 #Create a list of species above a certain number of observation points.
 speciesList <- SpeciesFreq$species
@@ -201,3 +202,11 @@ for(speciesEval in speciesDone){
 
 #Output MaxEnt model evaluation summary to a single file.
 write.table(XMEvaluationsTotal,"LANativeIndicatorTaxa.txt",quote=FALSE,sep="\t",row.names = FALSE)
+
+XMEvaluationsTotal <- read.table("LANativeIndicatorTaxa.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8-BOM")
+tmp <- dplyr::top_n(XMEvaluationsTotal,50,SEDI)
+colMax <- function(data) sapply(data, mean, na.rm = TRUE)
+
+XMEvaluationsSummary <- as.data.frame(colMax(tmp[,env.filtered$env.filtered]))
+
+
