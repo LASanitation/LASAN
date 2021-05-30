@@ -1,3 +1,4 @@
+#Generate the LAEI
 rm(list=ls())
 require(rgdal)
 require(raster)
@@ -190,3 +191,25 @@ SDM <- function(i) {
 
 #Run MaxEnt evaluations on all of the species.
 lapply(1:length(speciesList),SDM)
+
+
+####
+require(ggplot2)
+require(ggmap)
+require(viridis)
+require(leaflet)
+r <- raster("~/Desktop/Practicum/LASAN/MapLayers/World_Atlas_2015.tif")
+r <- crop(r,extent(raster("~/Desktop/Practicum/LASAN/MapLayers/LightPollutionEPSG4326.tif")))
+bbox <- extent(r)
+ggmap(get_stamenmap(bbox=c(left=bbox[1]-0.1,bottom=bbox[3]-0.1,right=bbox[2]+0.1,top=bbox[4]+0.1)))
+plot(r,main = "World Atlas of Artificial Night-sky Brightness\nmicro-candela per square meter",
+     col = viridis(10),
+     axes = FALSE,
+     box = FALSE,
+     ext = extent(r),
+     legend = TRUE, add=TRUE)
+                              
+pal <- colorNumeric(viridis(10), domain=values(rPA),na.color = "transparent")
+leaflet() %>% addTiles() %>%
+  addRasterImage(rPA, colors = pal, opacity = 0.8) %>%
+  addLegend(pal = pal, values = values(rPA),title = "LA Ecological<br>Index v0.1")
