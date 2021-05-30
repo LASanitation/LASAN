@@ -1,3 +1,4 @@
+#Evaluate the sensitivity of non-native species distribution models to environmental gradients
 rm(list=ls())
 require(rgdal)
 require(rJava)
@@ -202,3 +203,11 @@ for(speciesEval in speciesDone){
 
 #Output MaxEnt model evaluation summary to a single file.
 write.table(XMEvaluationsTotal,"LAIndicatorTaxa.txt",quote=FALSE,sep="\t",row.names = FALSE)
+
+XMEvaluationsTotal <- read.table("LAIndicatorTaxa.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
+tmp <- dplyr::top_n(XMEvaluationsTotal,100,SEDI)
+colMax <- function(data) sapply(data, mean, na.rm = TRUE)
+
+XMEvaluationsSummary <- as.data.frame(colMax(tmp[,env.filtered$env.filtered]))
+
+test <- read.table("MaxentEvaluationRhus integrifolia.txt", header=TRUE, sep="\t",as.is=T,skip=0,fill=TRUE,check.names=FALSE,quote="", encoding = "UTF-8")
